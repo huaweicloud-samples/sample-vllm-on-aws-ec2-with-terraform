@@ -1,0 +1,100 @@
+# =============================================================================
+# 复制本文件为 terraform.tfvars 后按实际情况填写
+# =============================================================================
+# 与规格、磁盘、带宽、网络模式相关的参数必须显式给出，本实践不依赖 provider 默认值。
+
+# -----------------------------------------------------------------------------
+# 区域与命名
+# -----------------------------------------------------------------------------
+region            = "cn-north-4"
+availability_zone = "cn-north-4b" # GPU 规格只在部分可用区上架，cn-north-4 需选 4b 或 4c
+name_prefix       = "vllm-gpu"
+
+# -----------------------------------------------------------------------------
+# 网络：留空即新建，填写即复用
+# -----------------------------------------------------------------------------
+# vpc_id           = ""
+# public_subnet_id = ""
+# private_subnet_id = ""
+vpc_cidr                   = "10.0.0.0/16"
+public_subnet_cidr         = "10.0.1.0/24"
+public_subnet_gateway_ip   = "10.0.1.1"
+private_subnet_cidr        = "10.0.10.0/24"
+private_subnet_gateway_ip  = "10.0.10.1"
+
+# -----------------------------------------------------------------------------
+# GPU 规格与镜像：这两项决定实例形态，必须按目标可用区实际情况确认
+# -----------------------------------------------------------------------------
+
+# 必填：填写目标可用区实际可售的 GPU 规格名称。
+# 可选规格族（均只在部分可用区提供，需先在控制台或用规格查询接口确认该可用区在售）：
+#   g5.*  示例 g5.2xlarge.8   —— 单卡显存 16GB，适合 1B-7B 量化/单卡推理
+#   g6.*  示例 g6.2xlarge.2   —— 单卡 T4，适合小模型
+#   pi2.* 示例 pi2.2xlarge.1  —— 单卡推理加速型
+#   p2v.* 示例 p2v.4xlarge.12 —— 多卡，需同步调大 tensor_parallel_size
+# 换规格时同步核对：显存容量与卡数 → gpu_memory_utilization / max_model_len / tensor_parallel_size
+gpu_flavor = "g5.2xlarge.8"
+
+# 实例数固定为 1：伸缩组只承担健康检查与自动替换，不做横向扩容
+instance_count = 1
+
+# 镜像二选一：
+#   1) 已知镜像 ID（推荐）：直接填 image_id，忽略 image_name_regex
+#   2) 按名称挑选：在本区域公共镜像列表里确认预装 GPU 驱动的镜像名，把 image_name_regex 填成该名称的锚定正则
+# 使用不含 GPU 驱动的通用镜像时，实例内的初始化脚本会中止并写明原因。
+image_id           = ""
+image_name_regex   = ""                # 二选一的必填项，留空则规划阶段中止
+image_architecture = "x86"
+
+# 磁盘：系统盘容纳运行环境，数据盘持久化模型权重缓存
+system_disk_type = "GPSSD"
+system_disk_size = 100
+
+enable_data_disk = true
+data_disk_type   = "GPSSD"
+data_disk_size   = 200
+
+# -----------------------------------------------------------------------------
+# 出网与公网入口
+# -----------------------------------------------------------------------------
+# 实例自带公网地址用于 SSH 运维；出网下载模型权重默认走公网 NAT 网关。
+# 若确认实例可由自身公网地址直接出网，可把 enable_nat_gateway 置为 false 关闭 NAT。
+enable_nat_gateway        = true
+nat_spec                  = "1"        # 小型，支持 1 万条 SNAT 连接
+nat_charging_mode         = "postPaid" # 取值 postPaid 或 prePaid
+nat_eip_type              = "5_bgp"
+nat_eip_charge_mode       = "traffic"  # traffic 按流量 / bandwidth 按带宽
+nat_eip_bandwidth_size    = 50         # 按流量取值 1-300，按带宽取值 1-2000
+
+instance_eip_type           = "5_bgp"
+instance_eip_share_type     = "PER"     # 独享带宽
+instance_eip_charge_mode    = "traffic"
+instance_eip_bandwidth_size = 50
+
+# -----------------------------------------------------------------------------
+# 访问通道：密钥对 + 安全组收敛到运维来源
+# -----------------------------------------------------------------------------
+
+# 填入运维人员自己的公钥内容，私钥保留在本地，不入仓库、不入状态文件
+ssh_public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... operator@laptop"
+
+# 允许 SSH 的来源网段，收敛到运维出口地址；不接受 0.0.0.0/0
+ops_cidr = "203.0.113.10/32"
+ssh_port = 22
+
+# -----------------------------------------------------------------------------
+# 推理服务
+# -----------------------------------------------------------------------------
+model_name             = "Qwen/Qwen2.5-0.5B-Instruct"
+max_model_len          = 8192
+gpu_memory_utilization = "0.85"
+tensor_parallel_size   = 1 # 需与所选规格的 GPU 卡数一致
+vllm_version           = "0.8.5"
+vllm_port              = 8000
+
+# 权重下载源与软件包索引：建议换成距离更近的站点以缩短首启时间
+model_source_base_url    = "https://huggingface.co"
+python_package_index_url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+
+model_cache_dir    = "/mnt/models/huggingface"
+bootstrap_log_path = "/var/log/vllm-setup.log"
